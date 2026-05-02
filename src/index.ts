@@ -7,6 +7,7 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import { defineCommand, runMain } from "citty"
 import pkg from "../package.json"
+import { checkForUpdate } from "./lib/update-check.ts"
 
 const VERSION = pkg.version || "0.0.0"
 
@@ -991,5 +992,6 @@ export const main = defineCommand({
 
 // Only run when executed directly (not imported for testing)
 if (import.meta.main) {
+  await checkForUpdate()
   runMain(main)
 }
