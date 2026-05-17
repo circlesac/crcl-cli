@@ -175,6 +175,15 @@ const MEMBERS_RESPONSE = [
   { user_id: 2, email: "bob@circles.ac", name: "Bob", role: "member", created_at: "2025-02-01T00:00:00Z" },
 ]
 
+const GROUPS_RESPONSE = [
+  { id: 10, org_id: 1, name: "Engineering", alias: "eng", description: "Engineers", created_at: "2025-01-01T00:00:00Z" },
+  { id: 11, org_id: 1, name: "Design", alias: "design", description: null, created_at: "2025-02-01T00:00:00Z" },
+]
+
+const GROUP_MEMBERS_RESPONSE = [
+  { user_id: 1, email: "alice@circles.ac", name: "Alice", role: "admin", created_at: "2025-01-01T00:00:00Z" },
+]
+
 // ── Help & Version ────────────────────────────────────────────────────────
 
 describe("help & version (meta)", () => {
@@ -185,6 +194,7 @@ describe("help & version (meta)", () => {
     expect(mod.main.subCommands).toHaveProperty("login")
     expect(mod.main.subCommands).toHaveProperty("orgs")
     expect(mod.main.subCommands).toHaveProperty("members")
+    expect(mod.main.subCommands).toHaveProperty("groups")
     expect(mod.main.subCommands).toHaveProperty("apikeys")
   })
 })
@@ -524,6 +534,131 @@ describe("members (mocked)", () => {
     const { stderr, exitCode } = await crcl(["members", "role", "nope@circles.ac", "--role", "owner"])
     expect(exitCode).toBe(1)
     expect(stderr).toContain("not found")
+  })
+})
+
+// ── Groups (mocked) ───────────────────────────────────────────────────────
+
+describe("groups (mocked)", () => {
+  it("groups list shows groups", async () => {
+    authedConfig()
+    mockFetch({ "GET /orgs/acme/groups": { status: 200, body: GROUPS_RESPONSE } })
+    const { stdout, exitCode } = await crcl(["groups", "list"])
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain("eng")
+    expect(stdout).toContain("design")
+  })
+
+  it("groups list shows empty message", async () => {
+    authedConfig()
+    mockFetch({ "GET /orgs/acme/groups": { status: 200, body: [] } })
+    const { stdout, exitCode } = await crcl(["groups", "list"])
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain("No groups found")
+  })
+
+  it("groups create posts and prints alias", async () => {
+    authedConfig()
+    mockFetch({
+      "POST /orgs/acme/groups": { status: 200, body: GROUPS_RESPONSE[0] },
+    })
+    const { stdout, exitCode } = await crcl(["groups", "create", "Engineering", "--alias", "eng"])
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain("Group created: eng (Engineering)")
+  })
+
+  it("groups update resolves by alias and PUTs by id", async () => {
+    authedConfig()
+    mockFetch({
+      "GET /orgs/acme/groups": { status: 200, body: GROUPS_RESPONSE },
+      "PUT /orgs/acme/groups/10": { status: 200, body: { ...GROUPS_RESPONSE[0], name: "Eng Team" } },
+    })
+    const { stdout, exitCode } = await crcl(["groups", "update", "eng", "--name", "Eng Team"])
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain("Group updated: eng (Eng Team)")
+  })
+
+  it("groups update requires a field", async () => {
+    authedConfig()
+    const { stderr, exitCode } = await crcl(["groups", "update", "eng"])
+    expect(exitCode).toBe(1)
+    expect(stderr).toContain("Nothing to update")
+  })
+
+  it("groups delete resolves alias and DELETEs", async () => {
+    authedConfig()
+    mockFetch({
+      "GET /orgs/acme/groups": { status: 200, body: GROUPS_RESPONSE },
+      "DELETE /orgs/acme/groups/10": { status: 204 },
+    })
+    const { stdout, exitCode } = await crcl(["groups", "delete", "eng"])
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain("Deleted group eng")
+  })
+
+  it("groups delete by numeric id fetches single group", async () => {
+    authedConfig()
+    mockFetch({
+      "GET /orgs/acme/groups/10": { status: 200, body: GROUPS_RESPONSE[0] },
+      "DELETE /orgs/acme/groups/10": { status: 204 },
+    })
+    const { stdout, exitCode } = await crcl(["groups", "delete", "10"])
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain("Deleted group eng")
+  })
+
+  it("groups delete rejects unknown alias", async () => {
+    authedConfig()
+    mockFetch({ "GET /orgs/acme/groups": { status: 200, body: GROUPS_RESPONSE } })
+    const { stderr, exitCode } = await crcl(["groups", "delete", "nope"])
+    expect(exitCode).toBe(1)
+    expect(stderr).toContain("not found")
+  })
+
+  it("groups members list shows members", async () => {
+    authedConfig()
+    mockFetch({
+      "GET /orgs/acme/groups/10/members": { status: 200, body: GROUP_MEMBERS_RESPONSE },
+      "GET /orgs/acme/groups": { status: 200, body: GROUPS_RESPONSE },
+    })
+    const { stdout, exitCode } = await crcl(["groups", "members", "list", "eng"])
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain("alice@circles.ac")
+  })
+
+  it("groups members add resolves user by email", async () => {
+    authedConfig()
+    mockFetch({
+      "GET /orgs/acme/groups": { status: 200, body: GROUPS_RESPONSE },
+      "GET /orgs/acme/members": { status: 200, body: MEMBERS_RESPONSE },
+      "POST /orgs/acme/groups/10/members": { status: 200, body: GROUP_MEMBERS_RESPONSE[0] },
+    })
+    const { stdout, exitCode } = await crcl(["groups", "members", "add", "eng", "alice@circles.ac", "--role", "admin"])
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain("Added alice@circles.ac to eng as admin")
+  })
+
+  it("groups members add accepts numeric user id without lookup", async () => {
+    authedConfig()
+    mockFetch({
+      "GET /orgs/acme/groups": { status: 200, body: GROUPS_RESPONSE },
+      "POST /orgs/acme/groups/10/members": { status: 200, body: GROUP_MEMBERS_RESPONSE[0] },
+    })
+    const { stdout, exitCode } = await crcl(["groups", "members", "add", "eng", "1"])
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain("Added alice@circles.ac to eng as admin")
+  })
+
+  it("groups members remove resolves user by email", async () => {
+    authedConfig()
+    mockFetch({
+      "GET /orgs/acme/groups": { status: 200, body: GROUPS_RESPONSE },
+      "GET /orgs/acme/members": { status: 200, body: MEMBERS_RESPONSE },
+      "DELETE /orgs/acme/groups/10/members/1": { status: 204 },
+    })
+    const { stdout, exitCode } = await crcl(["groups", "members", "remove", "eng", "alice@circles.ac"])
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain("Removed alice@circles.ac from eng")
   })
 })
 

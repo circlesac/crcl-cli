@@ -100,6 +100,23 @@ type Member = {
   created_at: string
 }
 
+type Group = {
+  id: number
+  org_id: number
+  name: string
+  alias: string
+  description: string | null
+  created_at: string
+}
+
+type GroupMember = {
+  user_id: number
+  email: string | null
+  name: string | null
+  role: string
+  created_at: string
+}
+
 export function emailFromJwt(token: string): string | null {
   try {
     const payload = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString())
@@ -740,6 +757,132 @@ async function cmdMembersRemove(config: Config, email: string) {
   console.log(`Removed ${email}.`)
 }
 
+// ── Groups ──────────────────────────────────────────────────────────────────
+
+async function resolveGroup(config: Config, org_slug: string, ref: string): Promise<Group> {
+  if (/^\d+$/.test(ref)) {
+    const { data } = await api<Group>(config, orgPath(org_slug, "groups", ref))
+    return data
+  }
+  const { data: groups } = await api<Group[]>(config, orgPath(org_slug, "groups"))
+  const g = groups.find((x) => x.alias === ref)
+  if (!g) {
+    console.error(`Group '${ref}' not found.`)
+    process.exit(1)
+  }
+  return g
+}
+
+async function resolveUserRef(config: Config, org_slug: string, ref: string): Promise<{ user_id: number; email: string | null }> {
+  if (/^\d+$/.test(ref)) return { user_id: Number(ref), email: null }
+  const { data: members } = await api<Member[]>(config, orgPath(org_slug, "members"))
+  const m = members.find((x) => x.email === ref)
+  if (!m) {
+    console.error(`User '${ref}' not found in org.`)
+    process.exit(1)
+  }
+  return { user_id: m.user_id, email: m.email }
+}
+
+async function cmdGroupsList(config: Config) {
+  const { org_slug } = await resolveOrg(config)
+  const { data: groups } = await api<Group[]>(config, orgPath(org_slug, "groups"))
+
+  if (groups.length === 0) {
+    console.log("No groups found.")
+    return
+  }
+
+  console.log(`${"ID".padEnd(6)} ${"Alias".padEnd(24)} ${"Name".padEnd(30)} Description`)
+  console.log("─".repeat(80))
+  for (const g of groups) {
+    console.log(`${String(g.id).padEnd(6)} ${g.alias.padEnd(24)} ${g.name.padEnd(30)} ${g.description || "-"}`)
+  }
+}
+
+async function cmdGroupsCreate(config: Config, name: string, opts: { alias?: string; description?: string }) {
+  const { org_slug } = await resolveOrg(config)
+  const body: Record<string, string> = { name }
+  if (opts.alias) body.alias = opts.alias
+  if (opts.description) body.description = opts.description
+
+  const { data: g } = await api<Group>(config, orgPath(org_slug, "groups"), { method: "POST", body })
+  console.log(`Group created: ${g.alias} (${g.name}) [id=${g.id}]`)
+}
+
+async function cmdGroupsUpdate(config: Config, ref: string, opts: { name?: string; alias?: string; description?: string }) {
+  const { org_slug } = await resolveOrg(config)
+  const body: Record<string, string | null> = {}
+  if (opts.name) body.name = opts.name
+  if (opts.alias !== undefined) body.alias = opts.alias
+  if (opts.description !== undefined) body.description = opts.description
+  if (Object.keys(body).length === 0) {
+    console.error("Nothing to update. Use --name, --alias, or --description.")
+    process.exit(1)
+  }
+
+  const existing = await resolveGroup(config, org_slug, ref)
+  const { data: g } = await api<Group>(
+    config,
+    orgPath(org_slug, "groups", String(existing.id)),
+    { method: "PUT", body }
+  )
+  console.log(`Group updated: ${g.alias} (${g.name}) [id=${g.id}]`)
+}
+
+async function cmdGroupsDelete(config: Config, ref: string) {
+  const { org_slug } = await resolveOrg(config)
+  const existing = await resolveGroup(config, org_slug, ref)
+  await api(config, orgPath(org_slug, "groups", String(existing.id)), { method: "DELETE" })
+  console.log(`Deleted group ${existing.alias} [id=${existing.id}]`)
+}
+
+async function cmdGroupsMembersList(config: Config, ref: string) {
+  const { org_slug } = await resolveOrg(config)
+  const existing = await resolveGroup(config, org_slug, ref)
+  const { data: members } = await api<GroupMember[]>(
+    config,
+    orgPath(org_slug, "groups", String(existing.id), "members")
+  )
+
+  if (members.length === 0) {
+    console.log("No members found.")
+    return
+  }
+
+  console.log(`${"ID".padEnd(8)} ${"Email".padEnd(30)} ${"Name".padEnd(20)} Role`)
+  console.log("─".repeat(72))
+  for (const m of members) {
+    console.log(`${String(m.user_id).padEnd(8)} ${(m.email || "-").padEnd(30)} ${(m.name || "-").padEnd(20)} ${m.role}`)
+  }
+}
+
+async function cmdGroupsMembersAdd(config: Config, ref: string, userRef: string, role: string) {
+  const { org_slug } = await resolveOrg(config)
+  const existing = await resolveGroup(config, org_slug, ref)
+  const u = await resolveUserRef(config, org_slug, userRef)
+
+  const { data: member } = await api<GroupMember>(
+    config,
+    orgPath(org_slug, "groups", String(existing.id), "members"),
+    { method: "POST", body: { user_id: u.user_id, role } }
+  )
+  console.log(`Added ${member.email || member.user_id} to ${existing.alias} as ${member.role}.`)
+}
+
+async function cmdGroupsMembersRemove(config: Config, ref: string, userRef: string) {
+  const { org_slug } = await resolveOrg(config)
+  const existing = await resolveGroup(config, org_slug, ref)
+  const u = await resolveUserRef(config, org_slug, userRef)
+
+  await api(
+    config,
+    orgPath(org_slug, "groups", String(existing.id), "members", String(u.user_id)),
+    { method: "DELETE" }
+  )
+  console.log(`Removed ${u.email || u.user_id} from ${existing.alias}.`)
+}
+
 // ── Auth Token ─────────────────────────────────────────────────────────────
 
 async function cmdAuthToken(config: Config) {
@@ -906,6 +1049,106 @@ const membersCommand = defineCommand({
   },
 })
 
+const groupsCommand = defineCommand({
+  meta: { name: "groups", description: "Manage groups" },
+  subCommands: {
+    list: defineCommand({
+      meta: { name: "list", description: "List groups in current org" },
+      args: { ...globalArgs },
+      async run({ args }) { await cmdGroupsList(loadConfig({ org: args.org, profile: args.profile })) },
+    }),
+    create: defineCommand({
+      meta: { name: "create", description: "Create a new group" },
+      args: {
+        ...globalArgs,
+        name: { type: "positional" as const, description: "Group name", required: true },
+        alias: { type: "string" as const, description: "Group alias (defaults to slugified name)" },
+        description: { type: "string" as const, description: "Group description" },
+      },
+      async run({ args }) {
+        await cmdGroupsCreate(loadConfig({ org: args.org, profile: args.profile }), args.name, {
+          alias: args.alias,
+          description: args.description,
+        })
+      },
+    }),
+    update: defineCommand({
+      meta: { name: "update", description: "Update group name, alias, or description" },
+      args: {
+        ...globalArgs,
+        group: { type: "positional" as const, description: "Group ID or alias", required: true },
+        name: { type: "string" as const, description: "New group name" },
+        alias: { type: "string" as const, description: "New group alias" },
+        description: { type: "string" as const, description: "New description" },
+      },
+      async run({ args }) {
+        await cmdGroupsUpdate(loadConfig({ org: args.org, profile: args.profile }), args.group, {
+          name: args.name,
+          alias: args.alias,
+          description: args.description,
+        })
+      },
+    }),
+    delete: defineCommand({
+      meta: { name: "delete", description: "Delete a group" },
+      args: {
+        ...globalArgs,
+        group: { type: "positional" as const, description: "Group ID or alias", required: true },
+      },
+      async run({ args }) {
+        await cmdGroupsDelete(loadConfig({ org: args.org, profile: args.profile }), args.group)
+      },
+    }),
+    members: defineCommand({
+      meta: { name: "members", description: "Manage group members" },
+      subCommands: {
+        list: defineCommand({
+          meta: { name: "list", description: "List members of a group" },
+          args: {
+            ...globalArgs,
+            group: { type: "positional" as const, description: "Group ID or alias", required: true },
+          },
+          async run({ args }) {
+            await cmdGroupsMembersList(loadConfig({ org: args.org, profile: args.profile }), args.group)
+          },
+        }),
+        add: defineCommand({
+          meta: { name: "add", description: "Add a member to a group" },
+          args: {
+            ...globalArgs,
+            group: { type: "positional" as const, description: "Group ID or alias", required: true },
+            user: { type: "positional" as const, description: "User ID or email", required: true },
+            role: { type: "string" as const, description: "Role: admin or member (default: member)" },
+          },
+          async run({ args }) {
+            await cmdGroupsMembersAdd(
+              loadConfig({ org: args.org, profile: args.profile }),
+              args.group,
+              args.user,
+              args.role || "member"
+            )
+          },
+        }),
+        remove: defineCommand({
+          meta: { name: "remove", description: "Remove a member from a group" },
+          args: {
+            ...globalArgs,
+            group: { type: "positional" as const, description: "Group ID or alias", required: true },
+            user: { type: "positional" as const, description: "User ID or email", required: true },
+          },
+          async run({ args }) {
+            await cmdGroupsMembersRemove(
+              loadConfig({ org: args.org, profile: args.profile }),
+              args.group,
+              args.user
+            )
+          },
+        }),
+      },
+    }),
+  },
+})
+
 const apikeysCommand = defineCommand({
   meta: { name: "apikeys", description: "Manage API keys (use --user or --org <slug>)" },
   subCommands: {
@@ -986,6 +1229,7 @@ export const main = defineCommand({
     }),
     orgs: orgsCommand,
     members: membersCommand,
+    groups: groupsCommand,
     apikeys: apikeysCommand,
   },
 })
