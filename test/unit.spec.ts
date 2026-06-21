@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { getDefaultOrg } from "../src/index"
+import { getDefaultOrg, startCallbackServer } from "../src/index"
 import type { Config } from "../src/index"
 
 describe("getDefaultOrg", () => {
@@ -61,5 +61,19 @@ describe("getDefaultOrg", () => {
       },
     }
     expect(getDefaultOrg(config)).toBeNull()
+  })
+})
+
+describe("startCallbackServer", () => {
+  it("ignores callbacks with mismatched OAuth state and waits for the valid callback", async () => {
+    const { port, waitForCode } = await startCallbackServer("expected-state")
+
+    const invalid = await fetch(`http://127.0.0.1:${port}/callback?code=old-code&state=stale-state`)
+    expect(invalid.status).toBe(400)
+    expect(await invalid.text()).toBe("Invalid state parameter")
+
+    const valid = await fetch(`http://127.0.0.1:${port}/callback?code=fresh-code&state=expected-state`)
+    expect(valid.status).toBe(200)
+    await expect(waitForCode).resolves.toBe("fresh-code")
   })
 })

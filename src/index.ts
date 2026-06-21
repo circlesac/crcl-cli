@@ -7,7 +7,7 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import { defineCommand, runMain } from "citty"
 import pkg from "../package.json"
-import { checkForUpdate } from "./lib/update-check.ts"
+import { checkForUpdate } from "./lib/update-check"
 
 const VERSION = pkg.version || "0.0.0"
 
@@ -76,6 +76,13 @@ export type Config = {
   refresh_token: string | null
   org: string | null
   email: string | null
+}
+
+export function getDefaultOrg(config: { orgs?: Record<string, { slug: string; default?: boolean }> }) {
+  for (const [id, entry] of Object.entries(config.orgs ?? {})) {
+    if (entry.default) return { id, entry }
+  }
+  return null
 }
 
 type UserMe = {
@@ -424,14 +431,12 @@ async function cmdLogin(config: Config, profile: string = "default") {
   console.log(`Config saved to ${configDir()}`)
 }
 
-function startCallbackServer(expectedState: string): Promise<{ port: number; waitForCode: Promise<string> }> {
+export function startCallbackServer(expectedState: string): Promise<{ port: number; waitForCode: Promise<string> }> {
   return new Promise((resolveServer) => {
     let resolveCode: (code: string) => void
-    let rejectCode: (err: Error) => void
 
-    const waitForCode = new Promise<string>((resolve, reject) => {
+    const waitForCode = new Promise<string>((resolve) => {
       resolveCode = resolve
-      rejectCode = reject
     })
 
     const server = createServer((req, res) => {
@@ -442,8 +447,6 @@ function startCallbackServer(expectedState: string): Promise<{ port: number; wai
         if (state !== expectedState) {
           res.writeHead(400, { "Content-Type": "text/plain" })
           res.end("Invalid state parameter")
-          rejectCode(new Error("OAuth state mismatch — possible CSRF attack"))
-          setTimeout(() => server.close(), 500)
         } else if (code) {
           res.writeHead(200, { "Content-Type": "text/html" })
           res.end("<html><body><h2>Authentication successful!</h2><p>You can close this window.</p></body></html>")
