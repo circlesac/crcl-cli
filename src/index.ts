@@ -102,7 +102,7 @@ type LoadConfigOpts = {
 
 async function loadConfig(opts: LoadConfigOpts = {}, allowNewProfile = false): Promise<Config> {
   const credentialProvider = createCredentialProvider({ profile: opts.profile })
-  const profile = credentialProvider.profileName
+  const profile = await credentialProvider.getSelectedProfileName()
   const storedProfile = await credentialProvider.getProfile()
   let credential: Awaited<ReturnType<SharedCredentialProvider["resolve"]>> | undefined
 
@@ -133,6 +133,35 @@ async function loadConfig(opts: LoadConfigOpts = {}, allowNewProfile = false): P
     credential_provider: credentialProvider,
     org: opts.org || process.env.CRCL_ORG || section?.org || null,
     email: credential?.kind === "jwt" ? emailFromJwt(credential.value) : null,
+  }
+}
+
+function selectedLoginProfile(profile?: string): string | undefined {
+  if (profile !== undefined) return profile
+  if (Object.hasOwn(process.env, "CIRCLES_PROFILE")) return process.env.CIRCLES_PROFILE
+  if (Object.hasOwn(process.env, "CRCL_PROFILE")) return process.env.CRCL_PROFILE
+  return undefined
+}
+
+async function loadLoginConfig(opts: LoadConfigOpts): Promise<{ config: Config; profile?: string }> {
+  const profile = selectedLoginProfile(opts.profile)
+  if (profile !== undefined) {
+    return { config: await loadConfig({ ...opts, profile }, true), profile }
+  }
+
+  const credentialProvider = createCredentialProvider({ profile: "default" })
+  return {
+    config: {
+      profile: "default",
+      api_url: opts.apiUrl || process.env.CRCL_API_URL || DEFAULT_API_URL,
+      auth_url: opts.authUrl || process.env.CRCL_AUTH_URL || DEFAULT_AUTH_URL,
+      access_token: null,
+      credential_kind: null,
+      credential_source: null,
+      credential_provider: credentialProvider,
+      org: opts.org || process.env.CRCL_ORG || null,
+      email: null,
+    },
   }
 }
 
@@ -223,10 +252,25 @@ async function resolveOrg(config: Config): Promise<{ org_slug: string }> {
 
 // ── Login ───────────────────────────────────────────────────────────────────
 
+export function profileFromVerifiedEmail(email: string): string {
+  return email.trim().replace(/[A-Z]/g, (character) => character.toLowerCase())
+}
+
+export async function saveLoginProfile(
+  profile: string | undefined,
+  email: string,
+  profileConfig: ProfileConfig,
+  credentials: { accessToken: string; refreshToken: string },
+): Promise<string> {
+  const targetProfile = profile ?? profileFromVerifiedEmail(email)
+  const credentialProvider = createCredentialProvider({ profile: targetProfile })
+  await credentialProvider.updateProfile({ config: profileConfig, credentials })
+  await credentialProvider.setCurrentProfile(targetProfile)
+  return targetProfile
+}
+
 async function cmdLogin(config: Config, profile?: string) {
-  const targetProfile = profile ?? config.profile
-  // --profile is required when using custom URLs
-  if ((config.api_url !== DEFAULT_API_URL || config.auth_url !== DEFAULT_AUTH_URL) && targetProfile === "default") {
+  if ((config.api_url !== DEFAULT_API_URL || config.auth_url !== DEFAULT_AUTH_URL) && profile === undefined) {
     console.error("--profile is required when using --api-url or --auth-url.")
     console.error("Example: crcl login --api-url https://api.example.com --profile myprofile")
     process.exit(1)
@@ -302,14 +346,12 @@ async function cmdLogin(config: Config, profile?: string) {
     console.log("\nNo organizations found. Create one with: crcl orgs create <slug> <name>")
   }
 
-  await config.credential_provider.updateProfile({
-    config: conf,
-    credentials: {
-      accessToken: tokenData.access_token,
-      refreshToken: tokenData.refresh_token,
-    },
+  const targetProfile = await saveLoginProfile(profile, me.email, conf, {
+    accessToken: tokenData.access_token,
+    refreshToken: tokenData.refresh_token,
   })
 
+  console.log(`Profile: ${targetProfile}`)
   console.log(`Config saved to ${dirname(config.credential_provider.paths.configFile)}`)
 }
 
@@ -1062,10 +1104,13 @@ export const main = defineCommand({
         profile: { type: "string" as const, description: "Profile name (required with --api-url)" },
       },
       async run({ args }) {
-        await cmdLogin(
-          await loadConfig({ org: args.org, profile: args.profile, apiUrl: args["api-url"], authUrl: args["auth-url"] }, true),
-          args.profile,
-        )
+        const { config, profile } = await loadLoginConfig({
+          org: args.org,
+          profile: args.profile,
+          apiUrl: args["api-url"],
+          authUrl: args["auth-url"],
+        })
+        await cmdLogin(config, profile)
       },
     }),
     logout: defineCommand({

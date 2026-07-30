@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { getDefaultOrg, startCallbackServer } from "../src/index"
+import { getDefaultOrg, profileFromVerifiedEmail, startCallbackServer } from "../src/index"
 
 describe("getDefaultOrg", () => {
   const baseConfig = {
@@ -69,5 +69,11 @@ describe("startCallbackServer", () => {
     const valid = await fetch(`http://127.0.0.1:${port}/callback?code=fresh-code&state=expected-state`)
     expect(valid.status).toBe(200)
     await expect(waitForCode).resolves.toBe("fresh-code")
+  })
+})
+
+describe("profileFromVerifiedEmail", () => {
+  it("trims and ASCII-lowercases the server-verified email", () => {
+    expect(profileFromVerifiedEmail(" YG+CLI@Melten.AI ")).toBe("yg+cli@melten.ai")
   })
 })
