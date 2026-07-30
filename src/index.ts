@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { randomBytes } from "node:crypto"
+import { existsSync, readFileSync } from "node:fs"
 import { createServer } from "node:http"
 import { dirname } from "node:path"
 import {
@@ -845,6 +846,89 @@ async function cmdAuthToken(config: Config) {
   process.stdout.write(config.access_token)
 }
 
+type AuthStatusRow = {
+  profile: string
+  current: string
+  status: string
+  email: string
+  authUrl: string
+}
+
+function sharedProfileNames(path: string): string[] {
+  if (!existsSync(path)) return []
+  return readFileSync(path, "utf8")
+    .split(/\r?\n/)
+    .map((line) => /^\[([^\]]+)]$/.exec(line.trim())?.[1])
+    .filter((profile): profile is string => Boolean(profile) && profile !== "__circles__")
+}
+
+function failedCredentialStatus(error: unknown): string {
+  if (!isCredentialError(error)) return "error"
+  switch (error.code) {
+    case CredentialErrorCode.NotFound: return "missing"
+    case CredentialErrorCode.Invalid: return "invalid"
+    case CredentialErrorCode.Ambiguous: return "ambiguous"
+    case CredentialErrorCode.RefreshFailed: return "refresh-failed"
+    case CredentialErrorCode.ProfileConflict: return "conflict"
+    case CredentialErrorCode.StorageFailed: return "storage-failed"
+  }
+}
+
+async function inspectAuthProfile(profile: string, selectedProfile: string): Promise<AuthStatusRow> {
+  const credentialProvider = createCredentialProvider({ profile })
+  const storedProfile = await credentialProvider.getProfile()
+  const apiUrl = normalizeBaseURL(storedProfile?.config.apiUrl || DEFAULT_API_URL)
+  const authUrl = normalizeBaseURL(storedProfile?.config.authUrl || DEFAULT_AUTH_URL)
+  const base = { profile, current: profile === selectedProfile ? "*" : "", email: "-", authUrl }
+
+  try {
+    const credential = await credentialProvider.resolve()
+    const { data: me, status } = await api<UserMe>({
+      profile,
+      api_url: apiUrl,
+      auth_url: authUrl,
+      access_token: credential.value,
+      credential_kind: credential.kind,
+      credential_source: credential.source,
+      credential_provider: credentialProvider,
+      org: storedProfile?.config.org || null,
+      email: null,
+    }, "/users/me", { noExit: true })
+    if (status === 200) return { ...base, status: "ok", email: me.email }
+    return { ...base, status: status === 401 ? "unauthorized" : status === 403 ? "forbidden" : `http-${status}` }
+  } catch (error) {
+    return { ...base, status: failedCredentialStatus(error) }
+  }
+}
+
+async function cmdAuthStatus() {
+  const credentialProvider = createCredentialProvider()
+  try {
+    await credentialProvider.getCurrentProfile()
+    const selectedProfile = await credentialProvider.getSelectedProfileName()
+    const profiles = [...new Set([
+      ...sharedProfileNames(credentialProvider.paths.configFile),
+      ...sharedProfileNames(credentialProvider.paths.credentialsFile),
+      selectedProfile,
+    ])]
+      .sort((left, right) => left === selectedProfile ? -1 : right === selectedProfile ? 1 : left.localeCompare(right))
+    const rows = await Promise.all(profiles.map((profile) => inspectAuthProfile(profile, selectedProfile)))
+    const headers = ["PROFILE", "CURRENT", "STATUS", "EMAIL", "AUTH URL"]
+    const values = rows.map((row) => [row.profile, row.current, row.status, row.email, row.authUrl])
+    const widths = headers.map((header, index) => Math.max(header.length, ...values.map((row) => row[index]!.length)))
+    const format = (row: string[]) => row.map((value, index) => index === row.length - 1 ? value : value.padEnd(widths[index]!)).join("  ")
+    console.log(format(headers))
+    console.log(format(widths.map((width) => "─".repeat(width))))
+    for (const row of values) console.log(format(row))
+  } catch (error) {
+    if (isCredentialError(error)) {
+      console.error(`Authentication status failed (${error.code}): ${error.message}`)
+      process.exit(1)
+    }
+    throw error
+  }
+}
+
 // ── Whoami ──────────────────────────────────────────────────────────────────
 
 async function cmdWhoami(config: Config) {
@@ -1157,6 +1241,10 @@ export const main = defineCommand({
     auth: defineCommand({
       meta: { name: "auth", description: "Authentication utilities" },
       subCommands: {
+        status: defineCommand({
+          meta: { name: "status", description: "Check all stored credential profiles" },
+          async run() { await cmdAuthStatus() },
+        }),
         token: defineCommand({
           meta: { name: "token", description: "Print a valid access token (refreshes if expired)" },
           args: { ...globalArgs },
