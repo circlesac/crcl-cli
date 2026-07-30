@@ -93,6 +93,10 @@ export function emailFromJwt(token: string): string | null {
   }
 }
 
+export function normalizeBaseURL(value: string): string {
+  return value.replace(/\/+$/, "")
+}
+
 // ── Load / Save ──────────────────────────────────────────────────────────
 
 type LoadConfigOpts = {
@@ -127,8 +131,8 @@ async function loadConfig(opts: LoadConfigOpts = {}, allowNewProfile = false): P
   const section = storedProfile?.config
   return {
     profile,
-    api_url: opts.apiUrl || process.env.CRCL_API_URL || section?.apiUrl || DEFAULT_API_URL,
-    auth_url: opts.authUrl || process.env.CRCL_AUTH_URL || section?.authUrl || DEFAULT_AUTH_URL,
+    api_url: normalizeBaseURL(opts.apiUrl || process.env.CRCL_API_URL || section?.apiUrl || DEFAULT_API_URL),
+    auth_url: normalizeBaseURL(opts.authUrl || process.env.CRCL_AUTH_URL || section?.authUrl || DEFAULT_AUTH_URL),
     access_token: credential?.value || null,
     credential_kind: credential?.kind || null,
     credential_source: credential?.source || null,
@@ -155,8 +159,8 @@ async function loadLoginConfig(opts: LoadConfigOpts): Promise<{ config: Config; 
   return {
     config: {
       profile: "default",
-      api_url: opts.apiUrl || process.env.CRCL_API_URL || DEFAULT_API_URL,
-      auth_url: opts.authUrl || process.env.CRCL_AUTH_URL || DEFAULT_AUTH_URL,
+      api_url: normalizeBaseURL(opts.apiUrl || process.env.CRCL_API_URL || DEFAULT_API_URL),
+      auth_url: normalizeBaseURL(opts.authUrl || process.env.CRCL_AUTH_URL || DEFAULT_AUTH_URL),
       access_token: null,
       credential_kind: null,
       credential_source: null,
@@ -257,7 +261,7 @@ async function resolveOrg(config: Config): Promise<{ org_slug: string }> {
 export function circlesOAuthEnvironment(apiUrl: string, authUrl: string): "prod" | "dev" | undefined {
   const endpointOrigin = (value: string): string | undefined => {
     try {
-      const endpoint = new URL(value)
+      const endpoint = new URL(normalizeBaseURL(value))
       if (endpoint.pathname !== "/" || endpoint.search || endpoint.hash || endpoint.username || endpoint.password) {
         return undefined
       }

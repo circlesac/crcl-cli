@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import {
   circlesOAuthEnvironment,
   getDefaultOrg,
+  normalizeBaseURL,
   profileFromVerifiedEmail,
   startCallbackServer,
 } from "../src/index"
@@ -90,5 +91,12 @@ describe("circlesOAuthEnvironment", () => {
     expect(circlesOAuthEnvironment("https://api-dev.circles.ac/", "https://auth-dev.circles.ac/")).toBe("dev")
     expect(circlesOAuthEnvironment("https://api.circles.ac", "https://auth-dev.circles.ac")).toBeUndefined()
     expect(circlesOAuthEnvironment("https://api.example.com", "https://auth.example.com")).toBeUndefined()
+  })
+})
+
+describe("normalizeBaseURL", () => {
+  it("removes trailing slashes before endpoint paths are appended or stored", () => {
+    expect(normalizeBaseURL("https://auth.circles.ac/")).toBe("https://auth.circles.ac")
+    expect(normalizeBaseURL("https://auth.example.com/base///")).toBe("https://auth.example.com/base")
   })
 })
