@@ -151,9 +151,12 @@ function mockFetch(routes: Record<string, RouteEntry>) {
   }) as unknown as typeof fetch
 }
 
-function fakeJwt(email: string): string {
+function fakeJwt(email: string, expiresAt?: number): string {
   const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url")
-  const payload = Buffer.from(JSON.stringify({ email })).toString("base64url")
+  const payload = Buffer.from(JSON.stringify({
+    email,
+    ...(expiresAt === undefined ? {} : { exp: Math.floor(expiresAt / 1000) }),
+  })).toString("base64url")
   return `${header}.${payload}.sig`
 }
 
@@ -264,6 +267,35 @@ describe("auth", () => {
     expect(stdout).toContain("Test User")
     expect(readCredentials()).not.toContain("canonical-token")
     expect(readCredentials()).not.toContain("compatibility-token")
+  })
+
+  it("auth token refreshes an expired shared profile before printing it", async () => {
+    const expired = fakeJwt("expired@circles.ac", Date.now() - 60_000)
+    const rotated = fakeJwt("rotated@circles.ac", Date.now() + 60_000)
+    setupProfile("default", {
+      auth_url: "https://issuer.example.test",
+      token: expired,
+      refresh: "old-refresh",
+    })
+    mockFetch({
+      "POST /token": {
+        status: 200,
+        body: { access_token: rotated, refresh_token: "new-refresh" },
+      },
+    })
+    let tokenOutput = ""
+    vi.spyOn(process.stdout, "write").mockImplementation(((chunk: string | Uint8Array) => {
+      tokenOutput += String(chunk)
+      return true
+    }) as typeof process.stdout.write)
+
+    const { exitCode } = await crcl(["auth", "token"])
+
+    expect(exitCode).toBe(0)
+    expect(tokenOutput).toBe(rotated)
+    expect(readCredentials()).toContain(`access_token = ${rotated}`)
+    expect(readCredentials()).toContain("refresh_token = new-refresh")
+    expect(readCredentials()).not.toContain("old-refresh")
   })
 })
 
