@@ -214,6 +214,62 @@ describe("help & version (meta)", () => {
 // ── Auth ──────────────────────────────────────────────────────────────────
 
 describe("auth", () => {
+  it("auth status verifies every profile and marks the selected profile", async () => {
+    const defaultToken = fakeJwt("default@circles.ac")
+    const devToken = fakeJwt("yg@melten.ai")
+    setupProfile("default", { token: defaultToken })
+    setupProfile("dev:yg@melten.ai", {
+      api_url: "https://api-dev.circles.ac",
+      auth_url: "https://auth-dev.circles.ac",
+      token: devToken,
+    })
+    writeConfig(`[__circles__]\ncurrent_profile = dev:yg@melten.ai\n\n${readConfig()}`)
+    mockFetch({
+      "GET https://api.circles.ac/users/me": { status: 200, body: { ...ME_RESPONSE, email: "default@circles.ac" } },
+      "GET https://api-dev.circles.ac/users/me": { status: 200, body: { ...ME_RESPONSE, email: "yg@melten.ai" } },
+    })
+
+    const { stdout, exitCode } = await crcl(["auth", "status"])
+
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain("PROFILE")
+    expect(stdout).toMatch(/dev:yg@melten\.ai\s+\*\s+ok\s+yg@melten\.ai\s+https:\/\/auth-dev\.circles\.ac/)
+    expect(stdout).toMatch(/default\s+ok\s+default@circles\.ac\s+https:\/\/auth\.circles\.ac/)
+    expect(stdout).not.toContain(defaultToken)
+    expect(stdout).not.toContain(devToken)
+  })
+
+  it("auth status shows unusable profiles without hiding healthy profiles", async () => {
+    const ambiguousToken = fakeJwt("bad@circles.ac")
+    setupProfile("default", { token: fakeJwt("default@circles.ac") })
+    writeConfig(`${readConfig()}[custom]\nauth_url = https://login.example.com\n`)
+    writeCredentials(`${readCredentials()}[ambiguous]\naccess_token = ${ambiguousToken}\napi_key = opaque-key\n`)
+    mockFetch({
+      "GET https://api.circles.ac/users/me": { status: 200, body: { ...ME_RESPONSE, email: "default@circles.ac" } },
+    })
+
+    const { stdout, exitCode } = await crcl(["auth", "status"])
+
+    expect(exitCode).toBe(0)
+    expect(stdout).toMatch(/default\s+\*\s+ok\s+default@circles\.ac/)
+    expect(stdout).toMatch(/ambiguous\s+ambiguous\s+-\s+https:\/\/auth\.circles\.ac/)
+    expect(stdout).toMatch(/custom\s+missing\s+-\s+https:\/\/login\.example\.com/)
+    expect(stdout).not.toContain(ambiguousToken)
+    expect(stdout).not.toContain("opaque-key")
+  })
+
+  it("auth status treats default as current when no current profile is configured", async () => {
+    setupProfile("default", { token: fakeJwt("default@circles.ac") })
+    mockFetch({
+      "GET /users/me": { status: 401, body: { message: "Unauthorized" } },
+    })
+
+    const { stdout, exitCode } = await crcl(["auth", "status"])
+
+    expect(exitCode).toBe(0)
+    expect(stdout).toMatch(/default\s+\*\s+unauthorized\s+-\s+https:\/\/auth\.circles\.ac/)
+  })
+
   it("whoami fails without auth", async () => {
     const { stderr, exitCode } = await crcl(["whoami"])
     expect(exitCode).toBe(1)
