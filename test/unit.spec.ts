@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest"
-import { getDefaultOrg, profileFromVerifiedEmail, startCallbackServer } from "../src/index"
+import {
+  circlesOAuthEnvironment,
+  getDefaultOrg,
+  profileFromVerifiedEmail,
+  startCallbackServer,
+} from "../src/index"
 
 describe("getDefaultOrg", () => {
   const baseConfig = {
@@ -73,7 +78,17 @@ describe("startCallbackServer", () => {
 })
 
 describe("profileFromVerifiedEmail", () => {
-  it("trims and ASCII-lowercases the server-verified email", () => {
-    expect(profileFromVerifiedEmail(" YG+CLI@Melten.AI ")).toBe("yg+cli@melten.ai")
+  it("combines the OAuth environment with the normalized verified email", () => {
+    expect(profileFromVerifiedEmail(" YG+CLI@Melten.AI ", "prod")).toBe("prod:yg+cli@melten.ai")
+    expect(profileFromVerifiedEmail(" YG+CLI@Melten.AI ", "dev")).toBe("dev:yg+cli@melten.ai")
+  })
+})
+
+describe("circlesOAuthEnvironment", () => {
+  it("recognizes only matching official production and development endpoint pairs", () => {
+    expect(circlesOAuthEnvironment("https://api.circles.ac", "https://auth.circles.ac")).toBe("prod")
+    expect(circlesOAuthEnvironment("https://api-dev.circles.ac/", "https://auth-dev.circles.ac/")).toBe("dev")
+    expect(circlesOAuthEnvironment("https://api.circles.ac", "https://auth-dev.circles.ac")).toBeUndefined()
+    expect(circlesOAuthEnvironment("https://api.example.com", "https://auth.example.com")).toBeUndefined()
   })
 })

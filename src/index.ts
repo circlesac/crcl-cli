@@ -20,6 +20,8 @@ const VERSION = pkg.version || "0.0.0"
 
 const DEFAULT_API_URL = "https://api.circles.ac"
 const DEFAULT_AUTH_URL = "https://auth.circles.ac"
+const DEV_API_URL = "https://api-dev.circles.ac"
+const DEV_AUTH_URL = "https://auth-dev.circles.ac"
 const CLIENT_ID = "circles-api"
 
 // ── Config types ─────────────────────────────────────────────────────────
@@ -252,8 +254,28 @@ async function resolveOrg(config: Config): Promise<{ org_slug: string }> {
 
 // ── Login ───────────────────────────────────────────────────────────────────
 
-export function profileFromVerifiedEmail(email: string): string {
-  return email.trim().replace(/[A-Z]/g, (character) => character.toLowerCase())
+export function circlesOAuthEnvironment(apiUrl: string, authUrl: string): "prod" | "dev" | undefined {
+  const endpointOrigin = (value: string): string | undefined => {
+    try {
+      const endpoint = new URL(value)
+      if (endpoint.pathname !== "/" || endpoint.search || endpoint.hash || endpoint.username || endpoint.password) {
+        return undefined
+      }
+      return endpoint.origin
+    } catch {
+      return undefined
+    }
+  }
+  const normalizedAPIURL = endpointOrigin(apiUrl)
+  const normalizedAuthURL = endpointOrigin(authUrl)
+  if (normalizedAPIURL === DEFAULT_API_URL && normalizedAuthURL === DEFAULT_AUTH_URL) return "prod"
+  if (normalizedAPIURL === DEV_API_URL && normalizedAuthURL === DEV_AUTH_URL) return "dev"
+  return undefined
+}
+
+export function profileFromVerifiedEmail(email: string, environment: "prod" | "dev"): string {
+  const normalizedEmail = email.trim().replace(/[A-Z]/g, (character) => character.toLowerCase())
+  return `${environment}:${normalizedEmail}`
 }
 
 export async function saveLoginProfile(
@@ -262,7 +284,11 @@ export async function saveLoginProfile(
   profileConfig: ProfileConfig,
   credentials: { accessToken: string; refreshToken: string },
 ): Promise<string> {
-  const targetProfile = profile ?? profileFromVerifiedEmail(email)
+  const environment = circlesOAuthEnvironment(profileConfig.apiUrl ?? "", profileConfig.authUrl ?? "")
+  if (!profile && !environment) {
+    throw new Error("Automatic profile naming requires matching official Circles production or development endpoints.")
+  }
+  const targetProfile = profile ?? profileFromVerifiedEmail(email, environment!)
   const credentialProvider = createCredentialProvider({ profile: targetProfile })
   await credentialProvider.updateProfile({ config: profileConfig, credentials })
   await credentialProvider.setCurrentProfile(targetProfile)
@@ -270,9 +296,9 @@ export async function saveLoginProfile(
 }
 
 async function cmdLogin(config: Config, profile?: string) {
-  if ((config.api_url !== DEFAULT_API_URL || config.auth_url !== DEFAULT_AUTH_URL) && profile === undefined) {
-    console.error("--profile is required when using --api-url or --auth-url.")
-    console.error("Example: crcl login --api-url https://api.example.com --profile myprofile")
+  if (!profile && !circlesOAuthEnvironment(config.api_url, config.auth_url)) {
+    console.error("--profile is required with custom or mixed Circles endpoints.")
+    console.error("Example: crcl login --api-url https://api.example.com --auth-url https://auth.example.com --profile myprofile")
     process.exit(1)
   }
   const state = randomBytes(16).toString("hex")
@@ -317,9 +343,7 @@ async function cmdLogin(config: Config, profile?: string) {
   console.log(`\nAuthenticated as ${me.name || me.email}`)
 
   // Save config (api_url, auth_url, org)
-  const conf: ProfileConfig = {}
-  if (config.api_url !== DEFAULT_API_URL) conf.apiUrl = config.api_url
-  if (config.auth_url !== DEFAULT_AUTH_URL) conf.authUrl = config.auth_url
+  const conf: ProfileConfig = { apiUrl: config.api_url, authUrl: config.auth_url }
 
   // Set default org
   const requestedOrg = config.org
@@ -1101,7 +1125,7 @@ export const main = defineCommand({
       meta: { name: "login", description: "Authenticate via circles.ac" },
       args: {
         ...loginArgs,
-        profile: { type: "string" as const, description: "Profile name (required with --api-url)" },
+        profile: { type: "string" as const, description: "Profile name (required with custom or mixed endpoints)" },
       },
       async run({ args }) {
         const { config, profile } = await loadLoginConfig({
