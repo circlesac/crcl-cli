@@ -20,6 +20,8 @@ const VERSION = pkg.version || "0.0.0"
 
 const DEFAULT_API_URL = "https://api.circles.ac"
 const DEFAULT_AUTH_URL = "https://auth.circles.ac"
+const DEV_API_URL = "https://api-dev.circles.ac"
+const DEV_AUTH_URL = "https://auth-dev.circles.ac"
 const CLIENT_ID = "circles-api"
 
 // ── Config types ─────────────────────────────────────────────────────────
@@ -91,6 +93,10 @@ export function emailFromJwt(token: string): string | null {
   }
 }
 
+export function normalizeBaseURL(value: string): string {
+  return value.replace(/\/+$/, "")
+}
+
 // ── Load / Save ──────────────────────────────────────────────────────────
 
 type LoadConfigOpts = {
@@ -102,7 +108,7 @@ type LoadConfigOpts = {
 
 async function loadConfig(opts: LoadConfigOpts = {}, allowNewProfile = false): Promise<Config> {
   const credentialProvider = createCredentialProvider({ profile: opts.profile })
-  const profile = credentialProvider.profileName
+  const profile = await credentialProvider.getSelectedProfileName()
   const storedProfile = await credentialProvider.getProfile()
   let credential: Awaited<ReturnType<SharedCredentialProvider["resolve"]>> | undefined
 
@@ -125,14 +131,43 @@ async function loadConfig(opts: LoadConfigOpts = {}, allowNewProfile = false): P
   const section = storedProfile?.config
   return {
     profile,
-    api_url: opts.apiUrl || process.env.CRCL_API_URL || section?.apiUrl || DEFAULT_API_URL,
-    auth_url: opts.authUrl || process.env.CRCL_AUTH_URL || section?.authUrl || DEFAULT_AUTH_URL,
+    api_url: normalizeBaseURL(opts.apiUrl || process.env.CRCL_API_URL || section?.apiUrl || DEFAULT_API_URL),
+    auth_url: normalizeBaseURL(opts.authUrl || process.env.CRCL_AUTH_URL || section?.authUrl || DEFAULT_AUTH_URL),
     access_token: credential?.value || null,
     credential_kind: credential?.kind || null,
     credential_source: credential?.source || null,
     credential_provider: credentialProvider,
     org: opts.org || process.env.CRCL_ORG || section?.org || null,
     email: credential?.kind === "jwt" ? emailFromJwt(credential.value) : null,
+  }
+}
+
+function selectedLoginProfile(profile?: string): string | undefined {
+  if (profile !== undefined) return profile
+  if (Object.hasOwn(process.env, "CIRCLES_PROFILE")) return process.env.CIRCLES_PROFILE
+  if (Object.hasOwn(process.env, "CRCL_PROFILE")) return process.env.CRCL_PROFILE
+  return undefined
+}
+
+async function loadLoginConfig(opts: LoadConfigOpts): Promise<{ config: Config; profile?: string }> {
+  const profile = selectedLoginProfile(opts.profile)
+  if (profile !== undefined) {
+    return { config: await loadConfig({ ...opts, profile }, true), profile }
+  }
+
+  const credentialProvider = createCredentialProvider({ profile: "default" })
+  return {
+    config: {
+      profile: "default",
+      api_url: normalizeBaseURL(opts.apiUrl || process.env.CRCL_API_URL || DEFAULT_API_URL),
+      auth_url: normalizeBaseURL(opts.authUrl || process.env.CRCL_AUTH_URL || DEFAULT_AUTH_URL),
+      access_token: null,
+      credential_kind: null,
+      credential_source: null,
+      credential_provider: credentialProvider,
+      org: opts.org || process.env.CRCL_ORG || null,
+      email: null,
+    },
   }
 }
 
@@ -223,12 +258,51 @@ async function resolveOrg(config: Config): Promise<{ org_slug: string }> {
 
 // ── Login ───────────────────────────────────────────────────────────────────
 
+export function circlesOAuthEnvironment(apiUrl: string, authUrl: string): "prod" | "dev" | undefined {
+  const endpointOrigin = (value: string): string | undefined => {
+    try {
+      const endpoint = new URL(normalizeBaseURL(value))
+      if (endpoint.pathname !== "/" || endpoint.search || endpoint.hash || endpoint.username || endpoint.password) {
+        return undefined
+      }
+      return endpoint.origin
+    } catch {
+      return undefined
+    }
+  }
+  const normalizedAPIURL = endpointOrigin(apiUrl)
+  const normalizedAuthURL = endpointOrigin(authUrl)
+  if (normalizedAPIURL === DEFAULT_API_URL && normalizedAuthURL === DEFAULT_AUTH_URL) return "prod"
+  if (normalizedAPIURL === DEV_API_URL && normalizedAuthURL === DEV_AUTH_URL) return "dev"
+  return undefined
+}
+
+export function profileFromVerifiedEmail(email: string, environment: "prod" | "dev"): string {
+  const normalizedEmail = email.trim().replace(/[A-Z]/g, (character) => character.toLowerCase())
+  return `${environment}:${normalizedEmail}`
+}
+
+export async function saveLoginProfile(
+  profile: string | undefined,
+  email: string,
+  profileConfig: ProfileConfig,
+  credentials: { accessToken: string; refreshToken: string },
+): Promise<string> {
+  const environment = circlesOAuthEnvironment(profileConfig.apiUrl ?? "", profileConfig.authUrl ?? "")
+  if (!profile && !environment) {
+    throw new Error("Automatic profile naming requires matching official Circles production or development endpoints.")
+  }
+  const targetProfile = profile ?? profileFromVerifiedEmail(email, environment!)
+  const credentialProvider = createCredentialProvider({ profile: targetProfile })
+  await credentialProvider.updateProfile({ config: profileConfig, credentials })
+  await credentialProvider.setCurrentProfile(targetProfile)
+  return targetProfile
+}
+
 async function cmdLogin(config: Config, profile?: string) {
-  const targetProfile = profile ?? config.profile
-  // --profile is required when using custom URLs
-  if ((config.api_url !== DEFAULT_API_URL || config.auth_url !== DEFAULT_AUTH_URL) && targetProfile === "default") {
-    console.error("--profile is required when using --api-url or --auth-url.")
-    console.error("Example: crcl login --api-url https://api.example.com --profile myprofile")
+  if (!profile && !circlesOAuthEnvironment(config.api_url, config.auth_url)) {
+    console.error("--profile is required with custom or mixed Circles endpoints.")
+    console.error("Example: crcl login --api-url https://api.example.com --auth-url https://auth.example.com --profile myprofile")
     process.exit(1)
   }
   const state = randomBytes(16).toString("hex")
@@ -273,9 +347,7 @@ async function cmdLogin(config: Config, profile?: string) {
   console.log(`\nAuthenticated as ${me.name || me.email}`)
 
   // Save config (api_url, auth_url, org)
-  const conf: ProfileConfig = {}
-  if (config.api_url !== DEFAULT_API_URL) conf.apiUrl = config.api_url
-  if (config.auth_url !== DEFAULT_AUTH_URL) conf.authUrl = config.auth_url
+  const conf: ProfileConfig = { apiUrl: config.api_url, authUrl: config.auth_url }
 
   // Set default org
   const requestedOrg = config.org
@@ -302,14 +374,12 @@ async function cmdLogin(config: Config, profile?: string) {
     console.log("\nNo organizations found. Create one with: crcl orgs create <slug> <name>")
   }
 
-  await config.credential_provider.updateProfile({
-    config: conf,
-    credentials: {
-      accessToken: tokenData.access_token,
-      refreshToken: tokenData.refresh_token,
-    },
+  const targetProfile = await saveLoginProfile(profile, me.email, conf, {
+    accessToken: tokenData.access_token,
+    refreshToken: tokenData.refresh_token,
   })
 
+  console.log(`Profile: ${targetProfile}`)
   console.log(`Config saved to ${dirname(config.credential_provider.paths.configFile)}`)
 }
 
@@ -1059,13 +1129,16 @@ export const main = defineCommand({
       meta: { name: "login", description: "Authenticate via circles.ac" },
       args: {
         ...loginArgs,
-        profile: { type: "string" as const, description: "Profile name (required with --api-url)" },
+        profile: { type: "string" as const, description: "Profile name (required with custom or mixed endpoints)" },
       },
       async run({ args }) {
-        await cmdLogin(
-          await loadConfig({ org: args.org, profile: args.profile, apiUrl: args["api-url"], authUrl: args["auth-url"] }, true),
-          args.profile,
-        )
+        const { config, profile } = await loadLoginConfig({
+          org: args.org,
+          profile: args.profile,
+          apiUrl: args["api-url"],
+          authUrl: args["auth-url"],
+        })
+        await cmdLogin(config, profile)
       },
     }),
     logout: defineCommand({

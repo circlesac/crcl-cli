@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest"
-import { getDefaultOrg, startCallbackServer } from "../src/index"
+import {
+  circlesOAuthEnvironment,
+  getDefaultOrg,
+  normalizeBaseURL,
+  profileFromVerifiedEmail,
+  startCallbackServer,
+} from "../src/index"
 
 describe("getDefaultOrg", () => {
   const baseConfig = {
@@ -69,5 +75,28 @@ describe("startCallbackServer", () => {
     const valid = await fetch(`http://127.0.0.1:${port}/callback?code=fresh-code&state=expected-state`)
     expect(valid.status).toBe(200)
     await expect(waitForCode).resolves.toBe("fresh-code")
+  })
+})
+
+describe("profileFromVerifiedEmail", () => {
+  it("combines the OAuth environment with the normalized verified email", () => {
+    expect(profileFromVerifiedEmail(" YG+CLI@Melten.AI ", "prod")).toBe("prod:yg+cli@melten.ai")
+    expect(profileFromVerifiedEmail(" YG+CLI@Melten.AI ", "dev")).toBe("dev:yg+cli@melten.ai")
+  })
+})
+
+describe("circlesOAuthEnvironment", () => {
+  it("recognizes only matching official production and development endpoint pairs", () => {
+    expect(circlesOAuthEnvironment("https://api.circles.ac", "https://auth.circles.ac")).toBe("prod")
+    expect(circlesOAuthEnvironment("https://api-dev.circles.ac/", "https://auth-dev.circles.ac/")).toBe("dev")
+    expect(circlesOAuthEnvironment("https://api.circles.ac", "https://auth-dev.circles.ac")).toBeUndefined()
+    expect(circlesOAuthEnvironment("https://api.example.com", "https://auth.example.com")).toBeUndefined()
+  })
+})
+
+describe("normalizeBaseURL", () => {
+  it("removes trailing slashes before endpoint paths are appended or stored", () => {
+    expect(normalizeBaseURL("https://auth.circles.ac/")).toBe("https://auth.circles.ac")
+    expect(normalizeBaseURL("https://auth.example.com/base///")).toBe("https://auth.example.com/base")
   })
 })

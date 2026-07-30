@@ -250,6 +250,20 @@ describe("auth", () => {
     expect(stdout).toContain("Logged out of all profiles")
   })
 
+  it("logout removes the current email profile and clears its selection", async () => {
+    setupProfile("default", { org: "acme" })
+    setupProfile("yg@melten.ai", { org: "beta", token: fakeJwt("yg@melten.ai") })
+    writeConfig(`[__circles__]\ncurrent_profile = yg@melten.ai\n\n${readConfig()}`)
+
+    const { stdout, exitCode } = await crcl(["logout"])
+
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain("Logged out of profile 'yg@melten.ai'")
+    expect(readConfig()).not.toContain("current_profile")
+    expect(readCredentials()).not.toContain("[yg@melten.ai]")
+    expect(readCredentials()).toContain("[default]")
+  })
+
   it("respects CRCL_AUTH_TOKEN env", async () => {
     mockFetch({ "GET /users/me": { status: 200, body: ME_RESPONSE } })
     const { stdout, exitCode } = await crcl(["whoami"], { CRCL_AUTH_TOKEN: "env-token" })
@@ -362,6 +376,20 @@ describe("whoami", () => {
     expect(stdout).toContain("Profile: default")
     expect(stdout).toContain("Org:     acme")
   })
+
+  it("uses the shared current email profile without --profile", async () => {
+    setupProfile("default", { org: "acme" })
+    setupProfile("yg@melten.ai", { org: "beta", token: fakeJwt("yg@melten.ai") })
+    writeConfig(`[__circles__]\ncurrent_profile = yg@melten.ai\n\n${readConfig()}`)
+    mockFetch({ "GET /users/me": { status: 200, body: { ...ME_RESPONSE, email: "yg@melten.ai" } } })
+
+    const { stdout, exitCode } = await crcl(["whoami"])
+
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain("Email:   yg@melten.ai")
+    expect(stdout).toContain("Profile: yg@melten.ai")
+    expect(stdout).toContain("Org:     beta")
+  })
 })
 
 // ── Orgs (mocked) ────────────────────────────────────────────────────────
@@ -402,6 +430,19 @@ describe("orgs (mocked)", () => {
     expect(exitCode).toBe(0)
     expect(stdout).toContain("Switched to org: beta")
     expect(readConfig()).toContain("org = beta")
+  })
+
+  it("orgs switch updates the shared current email profile", async () => {
+    setupProfile("default", { org: "acme" })
+    setupProfile("yg@melten.ai", { org: "acme", token: fakeJwt("yg@melten.ai") })
+    writeConfig(`[__circles__]\ncurrent_profile = yg@melten.ai\n\n${readConfig()}`)
+    mockFetch({ "GET /users/me": { status: 200, body: ME_RESPONSE } })
+
+    const { exitCode } = await crcl(["orgs", "switch", "beta"])
+
+    expect(exitCode).toBe(0)
+    expect(readConfig()).toContain("[yg@melten.ai]\norg = beta")
+    expect(readConfig()).toContain("[default]\norg = acme")
   })
 
   it("orgs switch rejects unknown slug", async () => {
@@ -744,6 +785,41 @@ describe("token refresh", () => {
 // ── Profiles ──────────────────────────────────────────────────────────────
 
 describe("profiles", () => {
+  it("stores a plain production login under its server and verified email", async () => {
+    const mod = await import("../src/index")
+    const target = await mod.saveLoginProfile(
+      undefined,
+      " YG+CLI@Melten.AI ",
+      { apiUrl: "https://api.circles.ac", authUrl: "https://auth.circles.ac", org: "acme" },
+      { accessToken: TEST_TOKEN, refreshToken: "login-refresh" },
+    )
+
+    expect(target).toBe("prod:yg+cli@melten.ai")
+    expect(readConfig()).toContain("[__circles__]\ncurrent_profile = prod:yg+cli@melten.ai")
+    expect(readConfig()).toContain("[prod:yg+cli@melten.ai]")
+    expect(readConfig()).toContain("api_url = https://api.circles.ac")
+    expect(readConfig()).toContain("auth_url = https://auth.circles.ac")
+    expect(readCredentials()).toContain("[prod:yg+cli@melten.ai]")
+    expect(readCredentials()).not.toContain("[default]")
+    expect(readCredentials().match(new RegExp(TEST_TOKEN.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"))).toHaveLength(1)
+  })
+
+  it("keeps the same email in a separate development profile", async () => {
+    const mod = await import("../src/index")
+    const target = await mod.saveLoginProfile(
+      undefined,
+      "yg@melten.ai",
+      { apiUrl: "https://api-dev.circles.ac", authUrl: "https://auth-dev.circles.ac" },
+      { accessToken: TEST_TOKEN, refreshToken: "dev-refresh" },
+    )
+
+    expect(target).toBe("dev:yg@melten.ai")
+    expect(readConfig()).toContain("current_profile = dev:yg@melten.ai")
+    expect(readConfig()).toContain("api_url = https://api-dev.circles.ac")
+    expect(readConfig()).toContain("auth_url = https://auth-dev.circles.ac")
+    expect(readCredentials()).toContain("[dev:yg@melten.ai]")
+  })
+
   it("multiple profiles with different URLs", async () => {
     authedConfig()
     setupProfile("dev", { org: "acme", api_url: "https://api-dev.circles.ac" })
