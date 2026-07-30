@@ -1,15 +1,9 @@
 import { describe, expect, it } from "vitest"
 import { getDefaultOrg, startCallbackServer } from "../src/index"
-import type { Config } from "../src/index"
 
 describe("getDefaultOrg", () => {
-  const baseConfig: Config = {
-    api_url: "https://api.circles.ac",
-    auth_url: "https://auth.circles.ac",
-    access_token: null,
-    refresh_token: null,
+  const baseConfig = {
     orgs: {},
-    email: null,
   }
 
   it("returns null when no orgs", () => {
@@ -17,7 +11,7 @@ describe("getDefaultOrg", () => {
   })
 
   it("returns null when no default org", () => {
-    const config: Config = {
+    const config = {
       ...baseConfig,
       orgs: {
         "1": { slug: "org-a" },
@@ -28,7 +22,7 @@ describe("getDefaultOrg", () => {
   })
 
   it("returns default org", () => {
-    const config: Config = {
+    const config = {
       ...baseConfig,
       orgs: {
         "1": { slug: "org-a" },
@@ -42,7 +36,7 @@ describe("getDefaultOrg", () => {
   })
 
   it("returns first default when multiple (edge case)", () => {
-    const config: Config = {
+    const config = {
       ...baseConfig,
       orgs: {
         "1": { slug: "org-a", default: true },
@@ -54,7 +48,7 @@ describe("getDefaultOrg", () => {
   })
 
   it("handles default: false", () => {
-    const config: Config = {
+    const config = {
       ...baseConfig,
       orgs: {
         "1": { slug: "org-a", default: false },
