@@ -17,9 +17,18 @@ let errs: string[] = []
 let savedFetch: typeof fetch
 
 beforeEach(() => {
+  mkdirSync(join(testHome, ".crcl"), { recursive: true })
   mkdirSync(join(testHome, ".config", "crcl"), { recursive: true })
   process.env.HOME = testHome
-  delete process.env.XDG_CONFIG_HOME
+  for (const name of [
+    "XDG_CONFIG_HOME",
+    "CIRCLES_AUTH_TOKEN",
+    "CIRCLES_PROFILE",
+    "CIRCLES_CONFIG_FILE",
+    "CIRCLES_SHARED_CREDENTIALS_FILE",
+    "CRCL_AUTH_TOKEN",
+    "CRCL_PROFILE",
+  ]) delete process.env[name]
 
   logs = []
   errs = []
@@ -73,8 +82,8 @@ async function crcl(args: string[], env: Record<string, string> = {}): Promise<{
   }
 }
 
-function configPath() { return join(testHome, ".config", "crcl", "config") }
-function credentialsPath() { return join(testHome, ".config", "crcl", "credentials") }
+function configPath() { return join(testHome, ".crcl", "config") }
+function credentialsPath() { return join(testHome, ".crcl", "credentials") }
 
 function writeConfig(ini: string) {
   writeFileSync(configPath(), ini)
@@ -244,6 +253,18 @@ describe("auth", () => {
     expect(exitCode).toBe(0)
     expect(stdout).toContain("Test User")
   })
+
+  it("prefers CIRCLES_AUTH_TOKEN over the compatibility alias", async () => {
+    mockFetch({ "GET /users/me": { status: 200, body: ME_RESPONSE } })
+    const { stdout, exitCode } = await crcl(["whoami"], {
+      CIRCLES_AUTH_TOKEN: "canonical-token",
+      CRCL_AUTH_TOKEN: "compatibility-token",
+    })
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain("Test User")
+    expect(readCredentials()).not.toContain("canonical-token")
+    expect(readCredentials()).not.toContain("compatibility-token")
+  })
 })
 
 // ── Config & Flags ────────────────────────────────────────────────────────
@@ -283,7 +304,7 @@ describe("config and flags", () => {
     expect(stderr).toContain("not found")
   })
 
-  it("XDG_CONFIG_HOME overrides default config path", async () => {
+  it("imports a legacy profile from XDG_CONFIG_HOME into the canonical shared files", async () => {
     const xdgHome = join(testHome, "xdg-config")
     mkdirSync(join(xdgHome, "crcl"), { recursive: true })
     writeFileSync(join(xdgHome, "crcl", "credentials"), `[default]\naccess_token = ${TEST_TOKEN}\n`)
@@ -291,6 +312,8 @@ describe("config and flags", () => {
     const { stdout, exitCode } = await crcl(["whoami"], { XDG_CONFIG_HOME: xdgHome })
     expect(exitCode).toBe(0)
     expect(stdout).toContain("Test User")
+    expect(readCredentials()).toContain(TEST_TOKEN)
+    expect(existsSync(join(xdgHome, "crcl", "credentials"))).toBe(true)
   })
 })
 
@@ -667,8 +690,9 @@ describe("groups (mocked)", () => {
 describe("token refresh", () => {
   it("auto-refreshes on 401", async () => {
     authedConfig({ refresh_token: "old-refresh" })
+    const newToken = fakeJwt("refreshed@circles.ac")
     mockFetch({
-      "POST /token": { status: 200, body: { access_token: "new-token", refresh_token: "new-refresh" } },
+      "POST /token": { status: 200, body: { access_token: newToken, refresh_token: "new-refresh" } },
       "GET /users/me": [
         { status: 401, body: { message: "Unauthorized" } },
         { status: 200, body: ME_RESPONSE },
@@ -680,7 +704,7 @@ describe("token refresh", () => {
     expect(stdout).toContain("Test User")
 
     const creds = readCredentials()
-    expect(creds).toContain("new-token")
+    expect(creds).toContain(newToken)
     expect(creds).toContain("new-refresh")
   })
 })
@@ -705,6 +729,18 @@ describe("profiles", () => {
     mockFetch({ "GET /users/me": { status: 200, body: ME_RESPONSE } })
     const { stdout } = await crcl(["whoami"], { CRCL_PROFILE: "dev" })
     expect(stdout).toContain("Profile: dev")
+  })
+
+  it("CIRCLES_PROFILE takes precedence over CRCL_PROFILE", async () => {
+    setupProfile("canonical", { org: "acme" })
+    setupProfile("compatibility", { org: "acme" })
+    mockFetch({ "GET /users/me": { status: 200, body: ME_RESPONSE } })
+
+    const { stdout } = await crcl(["whoami"], {
+      CIRCLES_PROFILE: "canonical",
+      CRCL_PROFILE: "compatibility",
+    })
+    expect(stdout).toContain("Profile: canonical")
   })
 })
 
@@ -751,8 +787,8 @@ describe("config migration", () => {
     expect(exitCode).toBe(0)
     expect(stdout).toContain("Test User")
 
-    // Old file should be removed
-    expect(existsSync(join(dir, "config.json"))).toBe(false)
+    // The rollback source is retained.
+    expect(existsSync(join(dir, "config.json"))).toBe(true)
 
     // New files should exist
     const config = readConfig()

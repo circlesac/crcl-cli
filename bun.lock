@@ -5,6 +5,7 @@
     "": {
       "name": "@circlesac/crcl",
       "dependencies": {
+        "@circlesac/credentials": "^1.0.0",
         "citty": "^0.2.1",
       },
       "devDependencies": {
@@ -16,6 +17,8 @@
     },
   },
   "packages": {
+    "@circlesac/credentials": ["@circlesac/credentials@1.0.0", "", {}, "sha512-3hgfL/JvQLQUoCFd/iW0Kjp6K6Iq4PzlSuGlDbEvG/U3zCaHYo2YY5vl/GQTHOU8z1CvzVyAxTnP3he5CNwYPA=="],
+
     "@babel/helper-string-parser": ["@babel/helper-string-parser@7.27.1", "", {}, "sha512-qMlSxKbpRlAridDExk92nSobyDdpPijUq2DW6oDnUqd0iOGxmQjyqhMIihI9+zv4LPyZdRje2cavWPbCbWm3eA=="],
 
     "@babel/helper-validator-identifier": ["@babel/helper-validator-identifier@7.28.5", "", {}, "sha512-qSs4ifwzKJSV39ucNjsvc6WVHs6b7S03sOh2OcHF9UHfVPqWWALUsNUVzhSBiItjRZoLHx7nIarVjqKVusUZ1Q=="],
