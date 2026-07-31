@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { sharedFilePaths } from "@circlesac/credentials"
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
@@ -15,20 +16,26 @@ class ExitError extends Error {
 let logs: string[] = []
 let errs: string[] = []
 let savedFetch: typeof fetch
+let savedProcessEnv: NodeJS.ProcessEnv
 
 beforeEach(() => {
+  savedProcessEnv = { ...process.env }
   mkdirSync(join(testHome, ".crcl"), { recursive: true })
   mkdirSync(join(testHome, ".config", "crcl"), { recursive: true })
-  process.env.HOME = testHome
   for (const name of [
-    "XDG_CONFIG_HOME",
     "CIRCLES_AUTH_TOKEN",
     "CIRCLES_PROFILE",
-    "CIRCLES_CONFIG_FILE",
-    "CIRCLES_SHARED_CREDENTIALS_FILE",
     "CRCL_AUTH_TOKEN",
     "CRCL_PROFILE",
   ]) delete process.env[name]
+  process.env.XDG_CONFIG_HOME = join(testHome, ".config")
+  process.env.CIRCLES_CONFIG_FILE = configPath()
+  process.env.CIRCLES_SHARED_CREDENTIALS_FILE = credentialsPath()
+
+  const paths = sharedFilePaths()
+  if (paths.configFile !== configPath() || paths.credentialsFile !== credentialsPath()) {
+    throw new Error("Tests must use isolated Circles credential files.")
+  }
 
   logs = []
   errs = []
@@ -50,6 +57,10 @@ afterEach(() => {
   if (existsSync(testHome)) {
     rmSync(testHome, { recursive: true, force: true })
   }
+  for (const key of Object.keys(process.env)) {
+    if (!(key in savedProcessEnv)) delete process.env[key]
+  }
+  Object.assign(process.env, savedProcessEnv)
 })
 
 // ── Test Helpers ──────────────────────────────────────────────────────────

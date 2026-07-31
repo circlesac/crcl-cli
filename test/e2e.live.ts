@@ -1,15 +1,33 @@
-import { describe, expect, it } from "vitest"
+import { afterAll, describe, expect, it } from "vitest"
 import { execFile } from "node:child_process"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+
+const testHome = mkdtempSync(join(tmpdir(), "crcl-e2e-"))
+
+afterAll(() => {
+  rmSync(testHome, { recursive: true, force: true })
+})
 
 function crcl(args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return new Promise((resolve) => {
-    execFile("bun", ["run", "src/index.ts", ...args], { timeout: 60_000 }, (err, stdout, stderr) => {
+    execFile("bun", ["run", "src/index.ts", ...args], {
+      timeout: 60_000,
+      env: {
+        ...process.env,
+        CRCL_NO_UPDATE_CHECK: "1",
+        XDG_CONFIG_HOME: join(testHome, ".config"),
+        CIRCLES_CONFIG_FILE: join(testHome, ".crcl", "config"),
+        CIRCLES_SHARED_CREDENTIALS_FILE: join(testHome, ".crcl", "credentials"),
+      },
+    }, (err, stdout, stderr) => {
       resolve({ stdout, stderr, exitCode: err?.code === undefined ? 0 : (typeof err.code === "number" ? err.code : 1) })
     })
   })
 }
 
-describe("e2e", () => {
+describe("live e2e", () => {
   it("login (opens browser)", async () => {
     const { stdout, exitCode } = await crcl(["login"])
     expect(exitCode).toBe(0)
@@ -56,11 +74,4 @@ describe("e2e", () => {
     const { exitCode } = await crcl(["whoami"])
     expect(exitCode).not.toBe(0)
   })
-
-  // login again to restore state
-  it("login again to restore", async () => {
-    const { stdout, exitCode } = await crcl(["login"])
-    expect(exitCode).toBe(0)
-    expect(stdout).toContain("Authenticated as")
-  }, 120_000)
 })

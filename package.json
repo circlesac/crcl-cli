@@ -12,6 +12,7 @@
     "dev": "bun run src/index.ts",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "postinstall": "node bin/install.js"
   },
   "repository": {
