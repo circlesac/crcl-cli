@@ -288,7 +288,7 @@ export async function saveLoginProfile(
   email: string,
   profileConfig: ProfileConfig,
   credentials: { accessToken: string; refreshToken: string },
-): Promise<string> {
+): Promise<{ profile: string; becameCurrent: boolean; currentProfile: string }> {
   const environment = circlesOAuthEnvironment(profileConfig.apiUrl ?? "", profileConfig.authUrl ?? "")
   if (!profile && !environment) {
     throw new Error("Automatic profile naming requires matching official Circles production or development endpoints.")
@@ -296,8 +296,15 @@ export async function saveLoginProfile(
   const targetProfile = profile ?? profileFromVerifiedEmail(email, environment!)
   const credentialProvider = createCredentialProvider({ profile: targetProfile })
   await credentialProvider.updateProfile({ config: profileConfig, credentials })
-  await credentialProvider.setCurrentProfile(targetProfile)
-  return targetProfile
+  // Logging in must not silently change which account profile-less commands
+  // use: the first profile becomes current, later logins only add themselves.
+  // Switching stays explicit via `crcl use`.
+  const existingCurrent = await credentialProvider.getCurrentProfile()
+  const becameCurrent = existingCurrent === undefined || existingCurrent === targetProfile
+  if (existingCurrent === undefined) {
+    await credentialProvider.setCurrentProfile(targetProfile)
+  }
+  return { profile: targetProfile, becameCurrent, currentProfile: existingCurrent ?? targetProfile }
 }
 
 async function cmdLogin(config: Config, profile?: string) {
@@ -375,13 +382,31 @@ async function cmdLogin(config: Config, profile?: string) {
     console.log("\nNo organizations found. Create one with: crcl orgs create <slug> <name>")
   }
 
-  const targetProfile = await saveLoginProfile(profile, me.email, conf, {
+  const saved = await saveLoginProfile(profile, me.email, conf, {
     accessToken: tokenData.access_token,
     refreshToken: tokenData.refresh_token,
   })
 
-  console.log(`Profile: ${targetProfile}`)
+  console.log(`Profile: ${saved.profile}`)
+  if (!saved.becameCurrent) {
+    console.log(`Current profile is still '${saved.currentProfile}'. Switch with: crcl use ${saved.profile}`)
+  }
   console.log(`Config saved to ${dirname(config.credential_provider.paths.configFile)}`)
+}
+
+async function cmdUse(profile: string) {
+  const credentialProvider = createCredentialProvider()
+  const known = [...new Set([
+    ...sharedProfileNames(credentialProvider.paths.configFile),
+    ...sharedProfileNames(credentialProvider.paths.credentialsFile),
+  ])]
+  if (!known.includes(profile)) {
+    console.error(`Profile '${profile}' not found.`)
+    if (known.length > 0) console.error(`Available profiles: ${known.sort().join(", ")}`)
+    process.exit(1)
+  }
+  await credentialProvider.setCurrentProfile(profile)
+  console.log(`Current profile: ${profile}`)
 }
 
 export function startCallbackServer(expectedState: string): Promise<{ port: number; waitForCode: Promise<string> }> {
@@ -1224,6 +1249,13 @@ export const main = defineCommand({
         })
         await cmdLogin(config, profile)
       },
+    }),
+    use: defineCommand({
+      meta: { name: "use", description: "Switch the current profile" },
+      args: {
+        profile: { type: "positional" as const, description: "Profile name (see crcl auth status)", required: true },
+      },
+      async run({ args }) { await cmdUse(args.profile) },
     }),
     logout: defineCommand({
       meta: { name: "logout", description: "Clear stored credentials" },

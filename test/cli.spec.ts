@@ -162,11 +162,14 @@ function mockFetch(routes: Record<string, RouteEntry>) {
   }) as unknown as typeof fetch
 }
 
-function fakeJwt(email: string, expiresAt?: number): string {
-  const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url")
+function fakeJwt(email: string, expiresAt = Date.now() + 60 * 60 * 1000): string {
+  // Signed-shape with an expiry: the credential provider rejects unsigned or
+  // never-expiring JWTs, exactly so fixtures like this cannot pass as real
+  // logins if they ever leak into a live store again.
+  const header = Buffer.from(JSON.stringify({ alg: "ES256" })).toString("base64url")
   const payload = Buffer.from(JSON.stringify({
     email,
-    ...(expiresAt === undefined ? {} : { exp: Math.floor(expiresAt / 1000) }),
+    exp: Math.floor(expiresAt / 1000),
   })).toString("base64url")
   return `${header}.${payload}.sig`
 }
@@ -861,7 +864,8 @@ describe("profiles", () => {
       { accessToken: TEST_TOKEN, refreshToken: "login-refresh" },
     )
 
-    expect(target).toBe("prod:yg+cli@melten.ai")
+    expect(target).toEqual({ profile: "prod:yg+cli@melten.ai", becameCurrent: true, currentProfile: "prod:yg+cli@melten.ai" })
+    // First login: no current profile existed, so this one becomes current.
     expect(readConfig()).toContain("[__circles__]\ncurrent_profile = prod:yg+cli@melten.ai")
     expect(readConfig()).toContain("[prod:yg+cli@melten.ai]")
     expect(readConfig()).toContain("api_url = https://api.circles.ac")
@@ -880,11 +884,47 @@ describe("profiles", () => {
       { accessToken: TEST_TOKEN, refreshToken: "dev-refresh" },
     )
 
-    expect(target).toBe("dev:yg@melten.ai")
-    expect(readConfig()).toContain("current_profile = dev:yg@melten.ai")
+    expect(target.profile).toBe("dev:yg@melten.ai")
     expect(readConfig()).toContain("api_url = https://api-dev.circles.ac")
     expect(readConfig()).toContain("auth_url = https://auth-dev.circles.ac")
     expect(readCredentials()).toContain("[dev:yg@melten.ai]")
+  })
+
+  it("a later login adds its profile without stealing the current one", async () => {
+    const mod = await import("../src/index")
+    const first = await mod.saveLoginProfile(
+      undefined,
+      "first@circles.ac",
+      { apiUrl: "https://api.circles.ac", authUrl: "https://auth.circles.ac" },
+      { accessToken: TEST_TOKEN, refreshToken: "first-refresh" },
+    )
+    const second = await mod.saveLoginProfile(
+      undefined,
+      "second@circles.ac",
+      { apiUrl: "https://api.circles.ac", authUrl: "https://auth.circles.ac" },
+      { accessToken: TEST_TOKEN, refreshToken: "second-refresh" },
+    )
+
+    expect(first.becameCurrent).toBe(true)
+    expect(second).toEqual({ profile: "prod:second@circles.ac", becameCurrent: false, currentProfile: "prod:first@circles.ac" })
+    expect(readConfig()).toContain("current_profile = prod:first@circles.ac")
+    expect(readCredentials()).toContain("[prod:second@circles.ac]")
+  })
+
+  it("crcl use switches the current profile and rejects unknown names", async () => {
+    setupProfile("prod:first@circles.ac", { token: fakeJwt("first@circles.ac") })
+    setupProfile("prod:second@circles.ac", { token: fakeJwt("second@circles.ac") })
+
+    const switched = await crcl(["use", "prod:second@circles.ac"])
+    expect(switched.exitCode).toBe(0)
+    expect(switched.stdout).toContain("Current profile: prod:second@circles.ac")
+    expect(readConfig()).toContain("current_profile = prod:second@circles.ac")
+
+    const unknown = await crcl(["use", "prod:missing@circles.ac"])
+    expect(unknown.exitCode).toBe(1)
+    expect(unknown.stderr).toContain("Profile 'prod:missing@circles.ac' not found.")
+    expect(unknown.stderr).toContain("prod:first@circles.ac")
+    expect(readConfig()).toContain("current_profile = prod:second@circles.ac")
   })
 
   it("multiple profiles with different URLs", async () => {
