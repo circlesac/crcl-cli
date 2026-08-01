@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { sharedFilePaths } from "@circlesac/credentials"
+import { createHash } from "node:crypto"
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
@@ -228,6 +229,45 @@ describe("help & version (meta)", () => {
 // ── Auth ──────────────────────────────────────────────────────────────────
 
 describe("auth", () => {
+  it("login sends an S256 PKCE challenge and exchanges the matching verifier", async () => {
+    let exchangeBody: URLSearchParams | undefined
+    globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
+      if (url === "https://auth.circles.ac/token") {
+        exchangeBody = new URLSearchParams(String(init?.body))
+        return Response.json({ access_token: TEST_TOKEN, refresh_token: "login-refresh" })
+      }
+      if (url === "https://api.circles.ac/users/me") return Response.json(ME_RESPONSE)
+      return new Response("Not Found", { status: 404 })
+    }) as unknown as typeof fetch
+    vi.spyOn(Bun, "spawn").mockReturnValue({} as ReturnType<typeof Bun.spawn>)
+
+    const login = crcl(["login"])
+    for (let attempt = 0; attempt < 100 && !logs.some((line) => line.startsWith("If it doesn't open, visit: ")); attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+
+    const authorizationURL = new URL(logs.find((line) => line.startsWith("If it doesn't open, visit: "))!.split("visit: ")[1]!)
+    expect(authorizationURL.searchParams.get("response_type")).toBe("code")
+    expect(authorizationURL.searchParams.get("code_challenge_method")).toBe("S256")
+    expect(authorizationURL.searchParams.get("code_challenge")).toMatch(/^[A-Za-z0-9_-]{43}$/)
+
+    const callbackURL = new URL(authorizationURL.searchParams.get("redirect_uri")!)
+    callbackURL.hostname = "127.0.0.1"
+    callbackURL.searchParams.set("code", "authorization-code")
+    callbackURL.searchParams.set("state", authorizationURL.searchParams.get("state")!)
+    expect((await savedFetch(callbackURL)).status).toBe(200)
+
+    const result = await login
+    expect(result.exitCode).toBe(0)
+    expect(exchangeBody?.get("code")).toBe("authorization-code")
+    expect(exchangeBody?.get("redirect_uri")).toBe(authorizationURL.searchParams.get("redirect_uri"))
+    expect(exchangeBody?.get("code_verifier")).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    expect(createHash("sha256").update(exchangeBody!.get("code_verifier")!).digest("base64url")).toBe(
+      authorizationURL.searchParams.get("code_challenge"),
+    )
+  })
+
   it("auth status verifies every profile and marks the selected profile", async () => {
     const defaultToken = fakeJwt("default@circles.ac")
     const devToken = fakeJwt("yg@melten.ai")

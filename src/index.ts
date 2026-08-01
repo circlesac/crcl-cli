@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { randomBytes } from "node:crypto"
+import { createHash, randomBytes } from "node:crypto"
 import { existsSync, readFileSync } from "node:fs"
 import { createServer } from "node:http"
 import { dirname } from "node:path"
@@ -283,6 +283,11 @@ export function profileFromVerifiedEmail(email: string, environment: "prod" | "d
   return `${environment}:${normalizedEmail}`
 }
 
+export function createPKCE(): { verifier: string; challenge: string } {
+  const verifier = randomBytes(32).toString("base64url")
+  return { verifier, challenge: createHash("sha256").update(verifier).digest("base64url") }
+}
+
 export async function saveLoginProfile(
   profile: string | undefined,
   email: string,
@@ -314,6 +319,7 @@ async function cmdLogin(config: Config, profile?: string) {
     process.exit(1)
   }
   const state = randomBytes(16).toString("hex")
+  const pkce = createPKCE()
   const { port, waitForCode } = await startCallbackServer(state)
   const redirectUri = `http://localhost:${port}/callback`
 
@@ -323,6 +329,8 @@ async function cmdLogin(config: Config, profile?: string) {
   authUrl.searchParams.set("response_type", "code")
   authUrl.searchParams.set("provider", "google")
   authUrl.searchParams.set("state", state)
+  authUrl.searchParams.set("code_challenge", pkce.challenge)
+  authUrl.searchParams.set("code_challenge_method", "S256")
 
   console.log("Opening browser for authentication...")
   console.log(`If it doesn't open, visit: ${authUrl}`)
@@ -338,6 +346,7 @@ async function cmdLogin(config: Config, profile?: string) {
       client_id: CLIENT_ID,
       code,
       redirect_uri: redirectUri,
+      code_verifier: pkce.verifier,
     }),
   })
 

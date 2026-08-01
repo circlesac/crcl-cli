@@ -1,11 +1,22 @@
 import { describe, expect, it } from "vitest"
+import { createHash } from "node:crypto"
 import {
   circlesOAuthEnvironment,
+  createPKCE,
   getDefaultOrg,
   normalizeBaseURL,
   profileFromVerifiedEmail,
   startCallbackServer,
 } from "../src/index"
+
+describe("createPKCE", () => {
+  it("creates an RFC 7636 S256 verifier and challenge", () => {
+    const pkce = createPKCE()
+
+    expect(pkce.verifier).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    expect(pkce.challenge).toBe(createHash("sha256").update(pkce.verifier).digest("base64url"))
+  })
+})
 
 describe("getDefaultOrg", () => {
   const baseConfig = {
