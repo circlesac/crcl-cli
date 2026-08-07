@@ -1,0 +1,32 @@
+{
+  "name": "crcl-cli",
+  "version": "0.0.0",
+  "description": "Circles CLI — manage orgs, API keys, and authenticate with circles.ac",
+  "type": "module",
+  "bin": {
+    "crcl": "bin/crcl.mjs"
+  },
+  "files": ["bin"],
+  "scripts": {
+    "build": "bun build src/index.ts --compile --outfile crcl",
+    "dev": "bun run src/index.ts",
+    "test": "bunx --bun vitest run",
+    "test:coverage": "bunx --bun vitest run --coverage",
+    "test:e2e": "bunx --bun vitest run --config vitest.e2e.config.ts",
+    "postinstall": "node bin/install.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/circlesac/crcl-cli.git"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@vitest/coverage-v8": "^4.1.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0"
+  },
+  "dependencies": {
+    "@circlesac/credentials": "^1.2.0",
+    "citty": "^0.2.1"
+  }
+}

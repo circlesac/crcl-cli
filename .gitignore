@@ -1,0 +1,16 @@
+node_modules/
+coverage/
+*.bun-build
+
+# Build artifacts
+bin/native/
+crcl
+crcl.exe
+*.tar.gz
+*.zip
+
+# Local settings
+.claude/settings.local.json
+
+# Build artifacts (local)
+dist/
