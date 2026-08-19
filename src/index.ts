@@ -608,16 +608,19 @@ async function cmdApikeysCreate(config: Config, args: string[], opts: { user?: b
     requireAuth(config)
     const { data: existing } = await api<ApiKey[]>(config, "/users/me/api_keys")
 
-    if (existing.length > 0 && !force) {
-      console.error(`User API key already exists:`)
-      for (const k of existing) console.error(`  ${k.id}  ${k.name}  ${k.masked_key}`)
-      console.error(`\nUse --force or -y to delete existing key(s) and create a new one.`)
+    // Only a key with the same name is ever replaced; keys under other names
+    // (live service credentials) are never touched.
+    const sameName = existing.filter((k) => k.name === name)
+    if (sameName.length > 0 && !force) {
+      console.error(`A user API key named "${name}" already exists:`)
+      for (const k of sameName) console.error(`  ${k.id}  ${k.name}  ${k.masked_key}`)
+      console.error(`\nUse --force or -y to replace it, or pick a different name.`)
       process.exit(1)
     }
 
-    if (existing.length > 0 && force) {
-      for (const k of existing) await api(config, `/users/me/api_keys/${encodeURIComponent(k.id)}`, { method: "DELETE" })
-      console.log(`Deleted ${existing.length} existing key(s).`)
+    if (sameName.length > 0 && force) {
+      for (const k of sameName) await api(config, `/users/me/api_keys/${encodeURIComponent(k.id)}`, { method: "DELETE" })
+      console.log(`Replaced ${sameName.length} key(s) named "${name}".`)
     }
 
     const { data: key } = await api<{ id: string; key: string; name: string; created_at: string }>(
@@ -634,27 +637,28 @@ async function cmdApikeysCreate(config: Config, args: string[], opts: { user?: b
 
   const { org_slug } = await resolveOrg(config)
 
-  // Check for existing keys
   const { data: existing } = await api<ApiKey[]>(
     config,
     orgPath(org_slug, "api_keys")
   )
 
-  if (existing.length > 0 && !force) {
-    console.error(`API key already exists for org '${org_slug}':`)
-    for (const k of existing) {
+  // Only a key with the same name is ever replaced; keys under other names
+  // (live service credentials) are never touched.
+  const sameName = existing.filter((k) => k.name === name)
+  if (sameName.length > 0 && !force) {
+    console.error(`An API key named "${name}" already exists for org '${org_slug}':`)
+    for (const k of sameName) {
       console.error(`  ${k.id}  ${k.name}  ${k.masked_key}`)
     }
-    console.error(`\nUse --force or -y to delete existing key(s) and create a new one.`)
+    console.error(`\nUse --force or -y to replace it, or pick a different name.`)
     process.exit(1)
   }
 
-  // Delete existing keys if --force
-  if (existing.length > 0 && force) {
-    for (const k of existing) {
+  if (sameName.length > 0 && force) {
+    for (const k of sameName) {
       await api(config, orgPath(org_slug, "api_keys", k.id), { method: "DELETE" })
     }
-    console.log(`Deleted ${existing.length} existing key(s).`)
+    console.log(`Replaced ${sameName.length} key(s) named "${name}".`)
   }
 
   const { data: key } = await api<{ id: string; key: string; name: string; created_at: string }>(

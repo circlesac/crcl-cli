@@ -134,12 +134,13 @@ function setupProfile(profile: string, opts: { org?: string; api_url?: string; a
 type RouteHandler = { status: number; body?: unknown }
 type RouteEntry = RouteHandler | RouteHandler[]
 
-function mockFetch(routes: Record<string, RouteEntry>) {
+function mockFetch(routes: Record<string, RouteEntry>, calls?: string[]) {
   const callCounts: Record<string, number> = {}
 
   globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
     const method = init?.method || "GET"
+    calls?.push(`${method} ${new URL(url).pathname}`)
 
     for (const [pattern, handler] of Object.entries(routes)) {
       const [routeMethod, routePath] = pattern.includes(" ") ? pattern.split(" ", 2) : ["GET", pattern]
@@ -623,24 +624,42 @@ describe("apikeys (mocked)", () => {
     expect(stdout).toContain("sk_full_key")
   })
 
-  it("apikeys create --org blocks when key exists", async () => {
-    authedConfig()
-    mockFetch({ "GET /orgs/acme/api_keys": { status: 200, body: API_KEYS_RESPONSE } })
-    const { stderr, exitCode } = await crcl(["apikeys", "create", "--org", "acme"])
-    expect(exitCode).toBe(1)
-    expect(stderr).toContain("--force")
-  })
-
-  it("apikeys create --org --force replaces existing", async () => {
+  it("apikeys create --org adds a differently named key without --force", async () => {
     authedConfig()
     mockFetch({
       "GET /orgs/acme/api_keys": { status: 200, body: API_KEYS_RESPONSE },
-      "DELETE /orgs/acme/api_keys/k1": { status: 204 },
-      "POST /orgs/acme/api_keys": { status: 200, body: { id: "k3", key: "sk_new", name: "forced", created_at: "2025-06-01T00:00:00Z" } },
+      "POST /orgs/acme/api_keys": { status: 200, body: { id: "k2", key: "sk_second", name: "ci-key", created_at: "2025-06-01T00:00:00Z" } },
     })
-    const { stdout, exitCode } = await crcl(["apikeys", "create", "--org", "acme", "--force"])
+    const { stdout, exitCode } = await crcl(["apikeys", "create", "--org", "acme", "ci-key"])
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain("sk_second")
+  })
+
+  it("apikeys create --org blocks only a same-named key", async () => {
+    authedConfig()
+    mockFetch({ "GET /orgs/acme/api_keys": { status: 200, body: API_KEYS_RESPONSE } })
+    const { stderr, exitCode } = await crcl(["apikeys", "create", "--org", "acme", "dev-key"])
+    expect(exitCode).toBe(1)
+    expect(stderr).toContain('named "dev-key" already exists')
+    expect(stderr).toContain("--force")
+  })
+
+  it("apikeys create --org --force replaces only the same-named key", async () => {
+    authedConfig()
+    const calls: string[] = []
+    mockFetch({
+      "GET /orgs/acme/api_keys": { status: 200, body: [
+        ...API_KEYS_RESPONSE,
+        { id: "k9", name: "prod-service", masked_key: "sk_...svc", created_at: "2025-01-01T00:00:00Z" },
+      ] },
+      "DELETE /orgs/acme/api_keys/k1": { status: 204 },
+      "POST /orgs/acme/api_keys": { status: 200, body: { id: "k3", key: "sk_new", name: "dev-key", created_at: "2025-06-01T00:00:00Z" } },
+    }, calls)
+    const { stdout, exitCode } = await crcl(["apikeys", "create", "--org", "acme", "dev-key", "--force"])
     expect(exitCode).toBe(0)
     expect(stdout).toContain("sk_new")
+    expect(stdout).toContain('Replaced 1 key(s) named "dev-key"')
+    expect(calls.filter((c) => c.startsWith("DELETE"))).toEqual(["DELETE /orgs/acme/api_keys/k1"])
   })
 
   it("apikeys delete --org removes key", async () => {
@@ -671,6 +690,39 @@ describe("apikeys (mocked)", () => {
     expect(exitCode).toBe(0)
     expect(stdout).toContain("User API key created")
     expect(stdout).toContain("sk_user_full")
+  })
+
+  it("apikeys create --user adds alongside existing keys and never deletes them", async () => {
+    authedConfig()
+    const calls: string[] = []
+    mockFetch({
+      "GET /users/me/api_keys": { status: 200, body: [
+        { id: "uk1", name: "prism-proxy", masked_key: "sk_...pp", created_at: "2025-01-01T00:00:00Z" },
+        { id: "uk2", name: "entropy-prod", masked_key: "sk_...en", created_at: "2025-01-01T00:00:00Z" },
+      ] },
+      "POST /users/me/api_keys": { status: 200, body: { id: "uk3", key: "sk_ci", name: "ci-key", created_at: "2025-06-01T00:00:00Z" } },
+    }, calls)
+    const { stdout, exitCode } = await crcl(["apikeys", "create", "--user", "ci-key"])
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain("sk_ci")
+    expect(calls.some((c) => c.startsWith("DELETE"))).toBe(false)
+  })
+
+  it("apikeys create --user --force replaces only the same-named key", async () => {
+    authedConfig()
+    const calls: string[] = []
+    mockFetch({
+      "GET /users/me/api_keys": { status: 200, body: [
+        { id: "uk1", name: "prism-proxy", masked_key: "sk_...pp", created_at: "2025-01-01T00:00:00Z" },
+        { id: "uk2", name: "ci-key", masked_key: "sk_...ci", created_at: "2025-01-01T00:00:00Z" },
+      ] },
+      "DELETE /users/me/api_keys/uk2": { status: 204 },
+      "POST /users/me/api_keys": { status: 200, body: { id: "uk3", key: "sk_ci_new", name: "ci-key", created_at: "2025-06-01T00:00:00Z" } },
+    }, calls)
+    const { stdout, exitCode } = await crcl(["apikeys", "create", "--user", "ci-key", "--force"])
+    expect(exitCode).toBe(0)
+    expect(stdout).toContain("sk_ci_new")
+    expect(calls.filter((c) => c.startsWith("DELETE"))).toEqual(["DELETE /users/me/api_keys/uk2"])
   })
 
   it("apikeys delete --user deletes user-level key", async () => {
